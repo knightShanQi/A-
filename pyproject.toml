@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a-share-predictor"
+version = "0.1.0"
+description = "A-share stock dashboard driven by stage analysis, intraday structure, and probability scoring."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "akshare>=1.18.24",
+  "duckdb>=1.2,<2",
+  "fastapi>=0.115,<1",
+  "numpy>=2.2,<3",
+  "pandas>=2.2,<3",
+  "plotly>=6.0,<7",
+  "psycopg[binary]>=3.2,<4",
+  "py7zr>=0.22,<1",
+  "scikit-learn>=1.6,<2",
+  "streamlit>=1.44,<2",
+  "streamlit-autorefresh>=1.0.1,<2",
+  "uvicorn>=0.34,<1",
+]
+
+[project.scripts]
+a-share-api = "a_share_predictor.api:run"
+a-share-dashboard = "a_share_predictor.dashboard:main"
+a-share-daily-stock-sync = "a_share_predictor.daily_stock_sync:main"
+a-share-market-backtest = "a_share_predictor.market_backtest_runner:main"
+a-share-multisource-factor-cluster = "a_share_predictor.multisource_factor_cluster:main"
+a-share-next-day-factor-model = "a_share_predictor.next_day_factor_model:main"
+a-share-news-impact = "a_share_predictor.news_impact:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

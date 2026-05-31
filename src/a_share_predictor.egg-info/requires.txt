@@ -1,0 +1,12 @@
+akshare>=1.18.24
+duckdb<2,>=1.2
+fastapi<1,>=0.115
+numpy<3,>=2.2
+pandas<3,>=2.2
+plotly<7,>=6.0
+psycopg[binary]<4,>=3.2
+py7zr<1,>=0.22
+scikit-learn<2,>=1.6
+streamlit<2,>=1.44
+streamlit-autorefresh<2,>=1.0.1
+uvicorn<1,>=0.34

@@ -1,0 +1,5 @@
+[console_scripts]
+a-share-api = a_share_predictor.api:run
+a-share-daily-stock-sync = a_share_predictor.daily_stock_sync:main
+a-share-dashboard = a_share_predictor.dashboard:main
+a-share-market-backtest = a_share_predictor.market_backtest_runner:main
