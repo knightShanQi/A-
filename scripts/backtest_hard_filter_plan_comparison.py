@@ -517,7 +517,7 @@ def _build_plan_candidates_for_day(day: pd.DataFrame, market_date: str, regime_r
     return candidates.reset_index(drop=True)
 
 
-def build_plan_candidate_pool(history: pd.DataFrame, regime: pd.DataFrame, date_from: str, date_to: str) -> pd.DataFrame:
+def build_plan_candidate_pool(history: pd.DataFrame, regime: pd.DataFrame, date_from: str, date_to: str, *, daily_cap: int = 150) -> pd.DataFrame:
     start = pd.to_datetime(date_from)
     end = pd.to_datetime(date_to)
     dates = sorted(
@@ -538,6 +538,8 @@ def build_plan_candidate_pool(history: pd.DataFrame, regime: pd.DataFrame, date_
         regime_row = pd.Series(row._asdict()) if row is not None else None
         candidates = _build_plan_candidates_for_day(day, market_date, regime_row)
         if not candidates.empty:
+            if int(daily_cap) > 0:
+                candidates = candidates.sort_values(["candidate_priority", "amount"], ascending=False).head(int(daily_cap)).copy()
             frames.append(candidates)
     if not frames:
         return pd.DataFrame()
@@ -877,6 +879,7 @@ def write_report(
         "",
         f"- Window: `{metadata['date_from']}` to `{metadata['date_to']}`.",
         "- New strategy implementation: P1 proxy from `strategy_hard_filter_optimization_plan_2026-05-31.md` using available ten-year daily cache features.",
+        f"- P1 candidate-pool cap: top `{metadata.get('daily_plan_cap', 150)}` by strategy soft score per day.",
         "- Ranking and labels: existing ten-year `model_scores.csv`; no model retraining in this run.",
         "- Caveat: ten-year cache does not include true ten-year intraday, fund-flow or news features, so those plan terms are not included here.",
         "",
@@ -965,6 +968,7 @@ def run_comparison(
     bull_path: Path,
     report_path: Path,
     force_history: bool,
+    daily_plan_cap: int,
 ) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     regime = load_regime(v3_dir, bull_path, date_from, date_to)
@@ -975,7 +979,7 @@ def run_comparison(
 
     print("[plan] building P1 candidate pool", flush=True)
     history = load_or_build_prepared_history(date_from, date_to, force=force_history)
-    plan_pool = build_plan_candidate_pool(history, regime, date_from, date_to)
+    plan_pool = build_plan_candidate_pool(history, regime, date_from, date_to, daily_cap=int(daily_plan_cap))
     plan_pool_path = output_dir / "plan_candidate_pool.csv"
     plan_pool.to_csv(plan_pool_path, index=False, encoding="utf-8-sig")
     print(f"[plan] candidate rows={len(plan_pool)} days={plan_pool['market_date'].nunique() if not plan_pool.empty else 0}", flush=True)
@@ -1011,6 +1015,7 @@ def run_comparison(
         "plan_candidate_rows": int(len(plan_scored)),
         "calendar_days": int(len(calendar)),
         "rule_count": int(len(rules)),
+        "daily_plan_cap": int(daily_plan_cap),
         "cost_bps_values": costs,
         "comparison_path": str(comparison_path),
         "candidate_counts_path": str(counts_path),
@@ -1043,6 +1048,7 @@ def _parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--bull-path", default=str(DEFAULT_BULL_PATH))
     parser.add_argument("--report-path", default=str(DEFAULT_REPORT_PATH))
     parser.add_argument("--force-history", action="store_true")
+    parser.add_argument("--daily-plan-cap", type=int, default=150)
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -1057,6 +1063,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         bull_path=Path(args.bull_path),
         report_path=Path(args.report_path),
         force_history=bool(args.force_history),
+        daily_plan_cap=int(args.daily_plan_cap),
     )
     print(
         json.dumps(
