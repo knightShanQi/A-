@@ -10,6 +10,7 @@ from a_share_predictor.multisource_factor_cluster import (
     build_auction_feature_frame,
     build_fund_flow_feature_frame,
     build_intraday_feature_frame,
+    inspect_multisource_coverage,
     run_one_year_multisource_cluster,
 )
 
@@ -191,6 +192,41 @@ def test_build_auction_feature_frame_extracts_interval_specific_proxy_rows(tmp_p
     assert frame["auction_proxy_available_flag"].tolist() == [1.0]
     assert frame.loc[0, "auction_open_gap"] == 0.03
     assert frame.loc[0, "auction_open_bar_amount_share"] == 0.30
+
+
+def test_inspect_multisource_coverage_labels_proxy_auction_source(tmp_path):
+    duckdb_path = tmp_path / "market.duckdb"
+    intraday_date = _write_multisource_duckdb(duckdb_path)
+    with duckdb.connect(str(duckdb_path)) as connection:
+        connection.execute(
+            """
+            create table a_share_call_auction_proxy as
+            select '000001' as symbol,
+                   cast(? as date) as trade_date,
+                   15::smallint as interval_minutes,
+                   10.0::real as open,
+                   9.9::real as pre_close,
+                   0.01::real as auction_open_gap,
+                   time '09:45:00' as first_bar_time,
+                   0.02::real as first_bar_ret,
+                   0.20::real as first_bar_volume_share,
+                   0.22::real as first_bar_amount_share,
+                   0.03::real as first_bar_range_pct,
+                   'daily_open_plus_first_intraday_bar' as source
+            """,
+            [str(intraday_date)],
+        )
+
+    coverage = inspect_multisource_coverage(
+        duckdb_path,
+        start_date=str(intraday_date),
+        end_date=str(intraday_date),
+        intraday_interval_minutes=15,
+    )
+
+    assert coverage["auction"]["true_call_auction_table_available"] is False
+    assert coverage["auction"]["proxy_table_available"] is True
+    assert coverage["auction"]["mode"] == "derived_daily_open_plus_first_intraday_bar"
 
 
 def test_run_one_year_multisource_cluster_writes_artifacts(tmp_path):

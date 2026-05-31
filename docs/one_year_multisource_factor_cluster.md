@@ -1,14 +1,18 @@
 # One-Year Multi-Source Factor Clustering
 
-This run extends the next-day A-share factor search with intraday, call-auction,
-sector, fund-flow, and broad-market candidates over the latest one-year window.
-It is designed as a factor-discovery pass, not a final production classifier.
+This run extends the next-day A-share factor search with intraday bars,
+opening-pressure/call-auction proxies, sector heat, stock-level fund flow, and
+broad-market context over the latest one-year window. It is a factor-discovery
+pass for the T+1 close-to-close direction label, not a final production trading
+system.
 
 ## Data Window
 
 - DuckDB: `data/openclaw_market_data.duckdb`
 - Daily table: `a_share_daily_prices`
 - Intraday table: `a_share_intraday_bars`
+- Fund-flow table: `a_share_stock_fund_flow`
+- Auction proxy table: `a_share_call_auction_proxy`
 - Analysis window: `2025-05-28` to `2026-05-28`
 - Daily rows in window: `1,313,402`
 - Daily trade days: `243`
@@ -20,7 +24,8 @@ It is designed as a factor-discovery pass, not a final production classifier.
 
 ## Source Coverage
 
-The database now contains real minute bars, including volume and amount:
+The database contains real intraday bars with `open`, `high`, `low`, `close`,
+`volume`, and `amount`:
 
 | Interval | Rows | Symbols | Trade Days | Date Range |
 | ---: | ---: | ---: | ---: | --- |
@@ -30,83 +35,94 @@ The database now contains real minute bars, including volume and amount:
 | 30 minutes | 88,080 | 5,507 | 2 | `2026-05-26` to `2026-05-28` |
 | 60 minutes | 38,716 | 5,507 | 2 | `2026-05-26` to `2026-05-28` |
 
-The latest full run uses the supplemented 15-minute intraday source. Its
-selected-interval trade-day coverage is `1.0`, and the merged true intraday
-sample share is `0.999852`, above the `0.05` coverage gate. True intraday
-columns were therefore admitted into the final one-year feature ranking.
-One-minute coverage remains only `0.00823045267489712`, so the 1-minute columns
-should still be treated as incomplete until the larger historical archive is
-imported.
+The full run uses the supplemented 15-minute source because it covers all 243
+trade days in the one-year window. Its merged true-intraday sample share is
+`0.999852`, above the `0.05` coverage gate, so true intraday price, volume, and
+amount-derived columns are admitted into the final feature ranking. One-minute
+coverage is only `0.00823045267489712` of daily trade days, so one-minute
+history is still incomplete for a one-year model.
 
-The local DuckDB now also contains a true per-stock main-fund-flow table:
+Standalone historical 09:25 call-auction data is still not present in DuckDB.
+The supplemented table `a_share_call_auction_proxy` is therefore explicitly
+treated as a derived proxy, not as true auction tick/order-book data:
 
-- Fund-flow table: `a_share_stock_fund_flow`
-- Rows in the one-year window: `151,168`
+- Rows: `1,312,653`
+- Symbols: `5,547`
+- Trade days: `243`
+- Date range: `2025-05-28` to `2026-05-28`
+- First available selected-interval bar: `09:45:00`
+- Mode: `derived_daily_open_plus_first_intraday_bar`
+
+The proxy combines daily open/pre-close information with first available
+intraday bar return, volume share, amount share, and range. It captures
+opening pressure, but it does not replace real 09:25 auction data.
+
+True stock-level main-fund-flow data is present with partial one-year coverage:
+
+- Rows: `151,168`
 - Covered symbols: `5,215`
 - Covered trade days: `91`
 - Date range: `2025-05-28` to `2026-05-28`
 - Sample coverage in the clustering run: `0.117698`
 
-True fund-flow columns passed the `0.05` sample-coverage gate and were included
-in the candidate set. They did not enter the final top 10 in this run; the best
-true fund-flow candidate was `true_fund_main_inflow_streak_5`.
+True fund-flow columns pass the `0.05` sample-coverage gate and are included in
+the candidate set. They do not enter the final top 10 in this run.
 
-True standalone call-auction tables are still not present in the local DuckDB.
-The current run therefore uses explicit opening-pressure proxies:
+Sector and broad-market context are derived cross-sectionally from daily
+constituents:
 
-- Call auction/opening pressure: `auction_open_gap` plus first available
-  intraday open-bar features. In the full-year 15-minute run the selected
-  interval starts at `09:45:00`, so these are opening-segment proxies rather
-  than a standalone 09:25 call-auction table.
-- Fund flow: true stock-level main-fund-flow columns plus amount, turnover, and
-  signed price-volume confirmation proxies.
-- Sector heat: industry and board-segment cross-sectional return, turnover, and
-  amount-ratio ranks from daily constituents.
-- Broad market: all-A-share momentum, turnover, activity, and risk-appetite
-  proxies.
-
-The source audit is stored in
-`.cache/one_year_multisource_factor_cluster_15min_full_year/data_coverage.json`.
-The latest run with true fund-flow candidates is stored in
-`.cache/one_year_multisource_factor_cluster_15min_fundflow_v2/data_coverage.json`.
+- Sector heat: industry return, up-ratio, turnover, and amount-ratio ranks.
+- Segment heat: market-board return, turnover, and liquidity ranks.
+- Broad market: all-A-share momentum, turnover, activity, risk appetite, and
+  market-state cluster behavior.
+- Trading constraints: ST exclusion, trade-gap/resumption flags, and limit-up
+  flags are included.
 
 ## Selected Top 10 Factors
 
 | Rank | Factor | Interpretation |
 | ---: | --- | --- |
 | 1 | `intraday_close_strength` | Same-day close location inside the intraday range. |
-| 2 | `close_vs_ma20` | Position of close versus the 20-day trend baseline. |
-| 3 | `segment_turnover_5` | Board-level heat and rotation liquidity. |
-| 4 | `ma_alignment_score` | Multi-horizon moving-average trend alignment. |
-| 5 | `market_turnover_20` | Broad-market turnover regime over 20 sessions. |
-| 6 | `intraday_tail30_ret` | Late-session intraday return and closing pressure. |
-| 7 | `intraday_low_time_ratio` | When the intraday low occurs, capturing early flush versus late weakness. |
-| 8 | `limit_up_flag` | Current-day limit-up state and next-day constraint behavior. |
-| 9 | `market_risk_appetite_5` | Broad participation versus recent downside pressure. |
-| 10 | `close_near_high_5` | Short-term close strength near recent highs. |
+| 2 | `trade_gap_days` | Suspension/resumption gap pressure and stale-price effect. |
+| 3 | `recent_resume_flag` | Recent resumption state after interrupted trading. |
+| 4 | `limit_up_flag` | Current-day limit-up state and next-day constraint behavior. |
+| 5 | `intraday_low_time_ratio` | Timing of the intraday low, separating early flush from late weakness. |
+| 6 | `close_vs_ma20` | Position of close versus the 20-day trend baseline. |
+| 7 | `ma_alignment_score` | Multi-horizon moving-average trend alignment. |
+| 8 | `intraday_tail30_ret` | Late-session intraday return and closing pressure. |
+| 9 | `market_turnover_20` | Broad-market turnover regime over 20 sessions. |
+| 10 | `segment_turnover_5` | Board-level liquidity heat and rotation. |
 
 These factors were selected by a composite ranking that combines ExtraTrees
 importance, mutual information with the T+1 label, standardized logistic
 coefficient magnitude, and market-state cluster lift. Correlated candidates are
-clustered so the selected list is not just several near-duplicates of the same
-signal.
+clustered so the selected list is not only near-duplicates of the same signal.
 
 ## Artifacts
 
-- `.cache/one_year_multisource_factor_cluster_15min_fundflow_v2/feature_ranking.csv`
-- `.cache/one_year_multisource_factor_cluster_15min_fundflow_v2/feature_cluster_summary.csv`
-- `.cache/one_year_multisource_factor_cluster_15min_fundflow_v2/market_state_cluster_summary.csv`
-- `.cache/one_year_multisource_factor_cluster_15min_fundflow_v2/selected_top10_factors.csv`
-- `.cache/one_year_multisource_factor_cluster_15min_fundflow_v2/data_coverage.json`
-- `.cache/one_year_multisource_factor_cluster_15min_fundflow_v2/cluster_report.md`
+- `.cache/one_year_multisource_factor_cluster_15min_fundflow_auction_proxy/feature_ranking.csv`
+- `.cache/one_year_multisource_factor_cluster_15min_fundflow_auction_proxy/feature_cluster_summary.csv`
+- `.cache/one_year_multisource_factor_cluster_15min_fundflow_auction_proxy/market_state_cluster_summary.csv`
+- `.cache/one_year_multisource_factor_cluster_15min_fundflow_auction_proxy/selected_top10_factors.csv`
+- `.cache/one_year_multisource_factor_cluster_15min_fundflow_auction_proxy/data_coverage.json`
+- `.cache/one_year_multisource_factor_cluster_15min_fundflow_auction_proxy/cluster_report.md`
 
 ## Reproduce
 
-From `E:\openclaw`:
+From `E:\openclaw`, build the opening-pressure proxy table:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\build_duckdb_call_auction_proxy.py `
+  --start-date 2025-05-28 `
+  --end-date 2026-05-28 `
+  --interval-minutes 15
+```
+
+Then run the one-year clustering pass:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_one_year_multisource_cluster.py `
-  --output-dir .cache\one_year_multisource_factor_cluster_15min_fundflow_v2 `
+  --output-dir .cache\one_year_multisource_factor_cluster_15min_fundflow_auction_proxy `
   --sample-limit 500000 `
   --importance-sample-limit 220000 `
   --batch-symbols 240 `
@@ -123,7 +139,8 @@ True stock-level main-fund-flow data was supplemented from the stockpage
   --sleep-seconds 0.02
 ```
 
-The 2026 15-minute source was supplemented from the Baidu Pan intraday archive with:
+The 2026 15-minute source was supplemented from the Baidu Pan intraday archive
+and imported into DuckDB:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\download_baidu_intraday_stock_data.py `
@@ -131,18 +148,13 @@ The 2026 15-minute source was supplemented from the Baidu Pan intraday archive w
   --intervals 15 `
   --download-dir .cache\baidu_intraday_stock\2026 `
   --extract
-```
 
-Then it was imported into DuckDB with:
-
-```powershell
 .\.venv\Scripts\python.exe scripts\sync_duckdb_intraday_stock_data.py `
   --input-dir .cache\baidu_intraday_stock\2026 `
   --intervals 15
 ```
 
-The 2025 portion of the one-year window came from the legacy 2000-2025 RAR
-archive:
+The 2025 part of the window came from the legacy 2000-2025 RAR archive:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\download_baidu_intraday_stock_data.py `
@@ -151,11 +163,7 @@ archive:
   --include-legacy-rar `
   --download-dir .cache\baidu_intraday_stock\legacy_2000_2025 `
   --extract
-```
 
-Only the needed 2025 date range was imported:
-
-```powershell
 .\.venv\Scripts\python.exe scripts\sync_duckdb_intraday_stock_data.py `
   --input-dir .cache\baidu_intraday_stock\legacy_2000_2025 `
   --intervals 15 `
@@ -164,9 +172,11 @@ Only the needed 2025 date range was imported:
   --retention-days off
 ```
 
-## Next Data Gap
+## Remaining Data Gaps
 
-The remaining material gaps are true standalone call-auction tables, deeper
-historical true fund-flow coverage, and full one-minute depth. The 15-minute
-intraday source now covers the entire one-year clustering window, and true
-main-fund-flow data is present with audited partial coverage.
+The remaining material gaps are true standalone historical 09:25 call-auction
+data, deeper historical true fund-flow coverage, and full one-minute depth.
+The current clustering result does fully use the available one-year 15-minute
+intraday source, the derived opening-pressure proxy table, partial true
+stock-level fund flow, sector heat, market trend, ST filtering, resumption
+flags, and limit-up constraints.

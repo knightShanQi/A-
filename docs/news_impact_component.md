@@ -19,8 +19,9 @@ The component is intentionally usable in three modes:
    `symbol`, `title`, `content`, `published_at`, `source`, `url`, `keyword`.
 3. Classify every item into an event category:
    `earnings`, `contract_order`, `shareholder_action`, `financing_mna`,
-   `policy_sector`, `regulatory_risk`, `product_technology`,
-   `market_opinion`, `accident_risk`, or `general`.
+   `dividend_distribution`, `policy_sector`, `fund_flow_market_heat`,
+   `regulatory_risk`, `product_technology`, `market_opinion`,
+   `accident_risk`, `routine_governance`, or `general`.
 4. Score direction, confidence, expected impact, session bucket, and likely impact horizon.
 5. Align every event to the effective trading day:
    intraday/pre-open news maps to the same trading day when available;
@@ -37,7 +38,27 @@ The component is intentionally usable in three modes:
 - `build_event_impact_dataset(news_events, daily_prices, horizons=(1, 3, 5))`
 - `summarize_category_impact(impact_df, horizons=(1, 3, 5))`
 - `build_latest_news_impact_signal(news_events, window_days=7)`
+- `build_research_news_impact_signal(news_events, window_days=7)`
+- `build_research_enhanced_news_signal(news_df, base_signal=None, symbol=None)`
 - `analyze_symbol_news_impact(symbol, ...)`
+
+## Prediction Integration
+
+The large-sample research priors are now part of the live prediction path:
+
+- `news_impact.py` stores the 1083-effective-symbol research prior version
+  `a_share_news_impact_1083_symbols_20260528`.
+- `modeling.py` schema v5 adds research-derived factors such as
+  `news_research_score_3d`, `news_research_score_7d`,
+  `news_research_excess_1d`, and `news_research_excess_5d`.
+- `build_live_probability_upgrade()` blends keyword sentiment with
+  category/direction research priors and writes `research_news_score` plus
+  expected excess-return fields into `signal_breakdown` and
+  `upgrade_components`.
+- The dashboard candidate and symbol-detail paths call
+  `build_research_enhanced_news_signal()`, so `news_score` and
+  `enhanced_attention_score` already include the research-adjusted message
+  signal.
 
 ## API
 
