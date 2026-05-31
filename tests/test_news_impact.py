@@ -202,6 +202,30 @@ def test_summarize_category_impact_reports_direction_hit_rate():
     assert risk["direction_hit_rate_1d"] == 1.0
 
 
+def test_research_enhanced_news_signal_uses_large_sample_priors():
+    raw = pd.DataFrame(
+        {
+            "symbol": ["000001"],
+            "title": ["new product approval and technology breakthrough"],
+            "content": ["patent approval improves product pipeline"],
+            "published_at": pd.to_datetime(["2026-01-02 10:00"]),
+            "source": ["newswire"],
+        }
+    )
+
+    signal = news_impact.build_research_enhanced_news_signal(
+        raw,
+        base_signal={"sentiment_score": 50.0, "confidence_score": 30.0},
+        symbol="000001",
+    )
+
+    assert signal["research_prior_version"] == news_impact.NEWS_RESEARCH_PRIOR_VERSION
+    assert signal["research_impact_score"] > 60.0
+    assert signal["sentiment_score"] > 50.0
+    assert signal["research_expected_excess_return_1d_pct"] > 0.0
+    assert signal["research_primary_category"] == "product_technology"
+
+
 def test_analyze_symbol_news_impact_uses_fetchers(monkeypatch):
     raw_news = pd.DataFrame(
         {

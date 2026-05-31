@@ -552,6 +552,9 @@ class BaiduPanShareClient:
                         dlink = self._resolve_dlink(item, state)
                     if dlink:
                         response = self.session.get(dlink, stream=True, timeout=self.timeout, headers=headers)
+                        if response.status_code in {403, 404, 429}:
+                            response.close()
+                            response = self._transfer_and_download(item, state, headers=headers)
                     else:
                         response = self._transfer_and_download(item, state, headers=headers)
                     response.raise_for_status()

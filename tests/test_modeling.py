@@ -133,6 +133,25 @@ def test_predict_latest_probability_fast_fallback_skips_slow_training(monkeypatc
     assert latest_probability == 0.66
 
 
+def test_news_snapshot_features_include_research_priors():
+    trade_dates = pd.DatetimeIndex(pd.to_datetime(["2026-01-02", "2026-01-05"]))
+    news = pd.DataFrame(
+        {
+            "title": ["new product approval and technology breakthrough"],
+            "content": ["patent approval improves product pipeline"],
+            "published_at": pd.to_datetime(["2026-01-02 10:00"]),
+            "source": ["newswire"],
+        }
+    )
+
+    features = modeling._build_news_snapshot_features(trade_dates, news)
+
+    assert "news_research_score_3d" in features.columns
+    assert "news_research_excess_1d" in features.columns
+    assert features.loc[pd.Timestamp("2026-01-02"), "news_research_score_3d"] > 0.0
+    assert features.loc[pd.Timestamp("2026-01-02"), "news_research_excess_1d"] > 0.0
+
+
 def test_build_backtest_metrics_detects_precision_gate():
     y_true = np.array([0, 0, 0, 0, 1, 1, 1, 1, 1, 1], dtype=int)
     y_prob = np.array([0.20, 0.25, 0.32, 0.41, 0.58, 0.61, 0.72, 0.83, 0.91, 0.95], dtype=float)

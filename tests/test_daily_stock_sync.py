@@ -118,6 +118,54 @@ def test_select_intraday_share_files_matches_year_ranges():
     assert [item["server_filename"] for item in selected] == ["15min.rar"]
 
 
+def test_baidu_download_falls_back_to_transfer_when_direct_link_forbidden(tmp_path):
+    class FakeResponse:
+        def __init__(self, status_code, chunks=()):
+            self.status_code = status_code
+            self._chunks = list(chunks)
+            self.closed = False
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise sync.requests.HTTPError(f"{self.status_code} error", response=self)
+
+        def iter_content(self, chunk_size):
+            return iter(self._chunks)
+
+        def close(self):
+            self.closed = True
+
+    class FakeSession:
+        def __init__(self):
+            self.direct_response = FakeResponse(403)
+
+        def get(self, *args, **kwargs):
+            return self.direct_response
+
+    client = sync.BaiduPanShareClient.__new__(sync.BaiduPanShareClient)
+    client.session = FakeSession()
+    client.timeout = 1.0
+    client._initial_page_state = lambda: {"ok": True}
+    client._resolve_dlink = lambda item, state: "https://example.invalid/file"
+    transfers = []
+
+    def fake_transfer(item, state, headers=None):
+        transfers.append((item, state, headers))
+        return FakeResponse(200, [b"archive"])
+
+    client._transfer_and_download = fake_transfer
+
+    downloaded = client._download_file_items(
+        [{"server_filename": "1min.7z", "size": len(b"archive"), "fs_id": 123}],
+        tmp_path,
+    )
+
+    assert downloaded == [tmp_path / "1min.7z"]
+    assert (tmp_path / "1min.7z").read_bytes() == b"archive"
+    assert client.session.direct_response.closed is True
+    assert len(transfers) == 1
+
+
 def test_extract_supported_archives_uses_tar_for_rar(tmp_path, monkeypatch):
     archive = tmp_path / "15min.rar"
     archive.write_bytes(b"placeholder")

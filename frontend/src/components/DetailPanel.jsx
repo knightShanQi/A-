@@ -69,11 +69,14 @@ const NEWS_CATEGORY_LABEL = {
   contract_order: "订单合同",
   shareholder_action: "股东行为",
   financing_mna: "融资并购",
+  dividend_distribution: "分红权益",
   policy_sector: "政策产业",
+  fund_flow_market_heat: "资金热度",
   regulatory_risk: "监管风险",
   product_technology: "产品技术",
   market_opinion: "市场观点",
   accident_risk: "经营风险",
+  routine_governance: "常规治理",
   general: "综合消息",
 };
 
@@ -156,6 +159,11 @@ function NewsImpactPanel({ newsImpact, loading, error }) {
 
       <div className="news-impact-metrics">
         <Metric label="最新冲击" value={score(signal.score)} note={signal.summary || "等待样本沉淀"} />
+        <Metric
+          label="研究先验"
+          value={score(signal.research_score ?? signal.score)}
+          note={`1日超额 ${score(signal.research_expected_excess_return_1d_pct || 0, "%")}`}
+        />
         <Metric label="事件样本" value={newsImpact.impact_sample_count || 0} note={`抓取 ${newsImpact.event_count || 0} 条`} />
         <Metric label="主导类别" value={categoryLabel(topCategory?.event_category)} note={`样本 ${topCategory?.event_count || 0}`} />
       </div>
