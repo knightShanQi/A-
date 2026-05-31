@@ -648,9 +648,9 @@ def enrich_candidates(frame: pd.DataFrame, regime: pd.DataFrame) -> pd.DataFrame
     text = enriched["candidate_strategy"].fillna("").astype(str).str.lower()
     enriched["strategy_family"] = np.select(
         [
-            text.str.contains("strategy1", regex=False) | text.str.contains("1", regex=False),
-            text.str.contains("strategy2", regex=False) | text.str.contains("2", regex=False),
-            text.str.contains("strategy3", regex=False) | text.str.contains("3", regex=False),
+            text.str.contains("strategy1", regex=False) | text.str.contains("策略1", regex=False) | text.str.contains("绛栫暐1", regex=False),
+            text.str.contains("strategy2", regex=False) | text.str.contains("策略2", regex=False) | text.str.contains("绛栫暐2", regex=False),
+            text.str.contains("strategy3", regex=False) | text.str.contains("策略3", regex=False) | text.str.contains("绛栫暐3", regex=False),
         ],
         ["strategy1", "strategy2", "strategy3"],
         default="unknown",
