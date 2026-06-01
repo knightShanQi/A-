@@ -91,6 +91,11 @@ REQUIRED_METRIC_COLUMNS = [
 ]
 
 
+def normalize_symbol_series(values: pd.Series) -> pd.Series:
+    extracted = values.astype(str).str.extract(r"(\d+)", expand=False).fillna("")
+    return extracted.str[-6:].str.zfill(6)
+
+
 class StrategySpec:
     def __init__(self, strategy_family: str, horizons: tuple[int, ...], target_returns: dict[int, float]) -> None:
         self.strategy_family = strategy_family
@@ -162,10 +167,10 @@ def _safe_mean(values: pd.Series) -> float:
 
 
 def load_plan_candidates(path: Path | str) -> pd.DataFrame:
-    frame = pd.read_csv(path, encoding="utf-8-sig")
+    frame = pd.read_csv(path, encoding="utf-8-sig", dtype={"symbol": "string"})
     if frame.empty:
         return frame
-    frame["symbol"] = frame["symbol"].astype(str).str.extract(r"(\d{6})", expand=False).fillna("").str.zfill(6)
+    frame["symbol"] = normalize_symbol_series(frame["symbol"])
     frame["market_date"] = pd.to_datetime(frame["market_date"], errors="coerce").dt.normalize()
     frame = frame.dropna(subset=["market_date", "symbol"]).copy()
     if "strategy_family" not in frame.columns:
@@ -190,11 +195,11 @@ def _load_history(path: Path | str | None) -> pd.DataFrame:
     if history_path.suffix.lower() == ".pkl":
         frame = pd.read_pickle(history_path)
     else:
-        frame = pd.read_csv(history_path, encoding="utf-8-sig")
+        frame = pd.read_csv(history_path, encoding="utf-8-sig", dtype={"symbol": "string"})
     if frame.empty:
         return frame
     frame = frame.copy()
-    frame["symbol"] = frame["symbol"].astype(str).str.extract(r"(\d{6})", expand=False).fillna("").str.zfill(6)
+    frame["symbol"] = normalize_symbol_series(frame["symbol"])
     date_column = "trade_date" if "trade_date" in frame.columns else "market_date"
     frame["market_date"] = pd.to_datetime(frame[date_column], errors="coerce").dt.normalize()
     for column in ["close", "high", "low"]:
