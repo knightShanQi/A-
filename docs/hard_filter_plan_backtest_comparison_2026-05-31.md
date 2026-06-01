@@ -5,7 +5,9 @@
 - Window: `2016-05-27` to `2026-05-26`.
 - New strategy implementation: P1 proxy from `strategy_hard_filter_optimization_plan_2026-05-31.md` using available ten-year daily cache features.
 - P1 candidate-pool cap: top `150` by strategy soft score per day with per-strategy quota.
-- Ranking and labels: existing ten-year `model_scores.csv`; no model retraining in this run.
+- Baseline ranking in this comparison uses existing ten-year `model_scores.csv`.
+- Per-strategy retraining/calibration for this plan is handled by `scripts/train_hard_filter_plan_strategy_models.py`.
+- Latest retraining artifacts: `.cache/hard_filter_plan_strategy_models/`.
 - Caveat: ten-year cache does not include true ten-year intraday, fund-flow or news features, so those plan terms are not included here.
 
 ## Candidate Breadth
@@ -61,3 +63,4 @@
 - Rule comparison: `.cache\hard_filter_plan_comparison_full\rule_comparison.csv`
 - Candidate counts: `.cache\hard_filter_plan_comparison_full\candidate_counts.csv`
 - Selected samples: `.cache\hard_filter_plan_comparison_full\selected_samples.csv`
+- Strategy model calibration report: `docs\hard_filter_plan_strategy_model_calibration_2026-06-01.md`

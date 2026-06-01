@@ -354,7 +354,7 @@ def test_daily_lightweight_model_is_serialized_for_api(monkeypatch):
 def test_market_backtest_payload_serializes_latest_result(monkeypatch):
     monkeypatch.setattr(
         api_service,
-        "load_latest_full_market_backtest",
+        "load_latest_market_backtest",
         lambda result_limit=50: {
             "summary": {"trade_count": 2, "win_rate": 0.5, "annualized_return": 0.12},
             "summary_path": "summary.json",
@@ -380,7 +380,7 @@ def test_market_backtest_payload_serializes_latest_result(monkeypatch):
 
 
 def test_market_backtest_payload_returns_missing_state(monkeypatch):
-    monkeypatch.setattr(api_service, "load_latest_full_market_backtest", lambda result_limit=50: {})
+    monkeypatch.setattr(api_service, "load_latest_market_backtest", lambda result_limit=50: {})
 
     payload = api_service.load_market_backtest_payload(result_limit=0)
 
@@ -781,6 +781,7 @@ def test_rebuild_task_reuses_running_future(monkeypatch):
 
 def test_market_backtest_task_reuses_running_future_for_strategy_aliases(monkeypatch):
     submitted = []
+    recorded = []
 
     class FakeFuture:
         def done(self):
@@ -792,6 +793,12 @@ def test_market_backtest_task_reuses_running_future_for_strategy_aliases(monkeyp
 
     monkeypatch.setattr(api_service.API_TASK_EXECUTOR, "submit", fake_submit)
     monkeypatch.setattr(api_service, "_get_async_task_progress", lambda task_id: {"completed": 0, "total": 1})
+    monkeypatch.setattr(
+        api_service.DEFAULT_TASK_REGISTRY,
+        "record_submitted",
+        lambda task_id, *, task_type, params: recorded.append((task_id, task_type, params)),
+    )
+    monkeypatch.setattr(api_service.DEFAULT_TASK_REGISTRY, "record_status", lambda *args, **kwargs: None)
     api_service.API_TASK_FUTURES.clear()
 
     first = api_service.start_market_backtest_task(
@@ -808,6 +815,8 @@ def test_market_backtest_task_reuses_running_future_for_strategy_aliases(monkeyp
     assert first["status"] == "running"
     assert second["status"] == "running"
     assert len(submitted) == 1
+    assert len(recorded) == 1
+    assert recorded[0][1] == "market_backtest"
     assert submitted[0][1]["strategy_mode"] == "strategy1"
 
 

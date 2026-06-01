@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
+import json
 import os
 import re
 import time
@@ -21,6 +23,7 @@ DEFAULT_CALENDAR_TABLE = "a_share_trade_calendar"
 DEFAULT_INTRADAY_TABLE = "a_share_intraday_bars"
 DEFAULT_STOCK_FUND_FLOW_TABLE = "a_share_stock_fund_flow"
 DEFAULT_CALL_AUCTION_PROXY_TABLE = "a_share_call_auction_proxy"
+DEFAULT_RESEARCH_BACKTEST_TABLE = "research_market_backtest_runs"
 DEFAULT_INTRADAY_RETENTION_DAYS = 365
 DEFAULT_INTRADAY_IMPORT_BATCH_FILES = 250
 INTRADAY_INTERVALS = (1, 5, 15, 30, 60)
@@ -248,6 +251,100 @@ def ensure_call_auction_proxy_indexes(
 ) -> None:
     connection.execute(f"create index if not exists {auction_table}_symbol_date_idx on {auction_table} (symbol, trade_date)")
     connection.execute(f"create index if not exists {auction_table}_date_idx on {auction_table} (trade_date)")
+
+
+def ensure_research_backtest_schema(
+    connection,
+    *,
+    backtest_table: str = DEFAULT_RESEARCH_BACKTEST_TABLE,
+) -> None:
+    connection.execute(
+        f"""
+        create table if not exists {backtest_table} (
+            run_id varchar primary key,
+            created_at timestamp not null default current_timestamp,
+            date_from date,
+            date_to date,
+            horizon_days integer,
+            positive_return double,
+            strategy_mode varchar,
+            top_k integer,
+            evaluation_engine varchar,
+            annualized_return double,
+            max_drawdown double,
+            portfolio_trade_count integer,
+            summary_json varchar not null,
+            summary_path varchar,
+            results_path varchar,
+            portfolio_nav_path varchar,
+            portfolio_trades_path varchar
+        )
+        """
+    )
+    connection.execute(f"create index if not exists {backtest_table}_created_idx on {backtest_table} (created_at)")
+    connection.execute(f"create index if not exists {backtest_table}_date_idx on {backtest_table} (date_from, date_to)")
+
+
+def _backtest_run_id(summary: dict[str, object], paths: dict[str, object]) -> str:
+    payload = {
+        "date_from": summary.get("date_from"),
+        "date_to": summary.get("date_to"),
+        "horizon_days": summary.get("horizon_days"),
+        "positive_return": summary.get("positive_return"),
+        "strategy_mode": summary.get("strategy_mode"),
+        "top_k": summary.get("top_k"),
+        "evaluation_engine": summary.get("evaluation_engine"),
+        "summary_path": paths.get("summary_path"),
+    }
+    return hashlib.sha1(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:24]
+
+
+def upsert_research_backtest_summary(
+    connection,
+    *,
+    summary: dict[str, object],
+    paths: dict[str, object] | None = None,
+    backtest_table: str = DEFAULT_RESEARCH_BACKTEST_TABLE,
+) -> str:
+    ensure_research_backtest_schema(connection, backtest_table=backtest_table)
+    clean_paths = dict(paths or {})
+    run_id = _backtest_run_id(summary, clean_paths)
+    row = (
+        run_id,
+        pd.to_datetime(summary.get("date_from"), errors="coerce").date()
+        if pd.notna(pd.to_datetime(summary.get("date_from"), errors="coerce"))
+        else None,
+        pd.to_datetime(summary.get("date_to"), errors="coerce").date()
+        if pd.notna(pd.to_datetime(summary.get("date_to"), errors="coerce"))
+        else None,
+        int(summary.get("horizon_days", 0) or 0),
+        float(summary.get("positive_return", 0.0) or 0.0),
+        str(summary.get("strategy_mode") or ""),
+        int(summary.get("top_k", 0) or 0),
+        str(summary.get("evaluation_engine") or ""),
+        float(summary.get("annualized_return", 0.0) or 0.0),
+        float(summary.get("max_drawdown", 0.0) or 0.0),
+        int(summary.get("portfolio_trade_count", 0) or 0),
+        json.dumps(summary, ensure_ascii=False, sort_keys=True),
+        str(clean_paths.get("summary_path") or ""),
+        str(clean_paths.get("results_path") or ""),
+        str(clean_paths.get("portfolio_nav_path") or ""),
+        str(clean_paths.get("portfolio_trades_path") or ""),
+    )
+    connection.execute(f"delete from {backtest_table} where run_id = ?", [run_id])
+    connection.execute(
+        f"""
+        insert into {backtest_table} (
+            run_id, date_from, date_to, horizon_days, positive_return,
+            strategy_mode, top_k, evaluation_engine, annualized_return,
+            max_drawdown, portfolio_trade_count, summary_json, summary_path,
+            results_path, portfolio_nav_path, portfolio_trades_path
+        )
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        row,
+    )
+    return run_id
 
 
 def _list_or_none(value: object) -> list | None:

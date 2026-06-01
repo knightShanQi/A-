@@ -22,6 +22,8 @@ from .data import (
     fetch_tushare_recent_trade_dates,
     fetch_tushare_stock_basic_all_statuses,
 )
+from .evaluation import assert_canonical_evaluation_summary, canonical_evaluation_metadata
+from .duckdb_store import connect_duckdb, upsert_research_backtest_summary
 from .portfolio_backtester import PortfolioBacktestConfig, simulate_portfolio_from_candidates
 from .store import (
     build_market_candidate_pool_store,
@@ -779,6 +781,9 @@ def _build_portfolio_history_frame(
 def _portfolio_summary(result: object) -> dict[str, object]:
     summary = getattr(result, "summary", {}) if result is not None else {}
     return {
+        "evaluation_engine": str(summary.get("evaluation_engine", "")),
+        "evaluation_primary_metric": str(summary.get("evaluation_primary_metric", "")),
+        "evaluation_primary_source": str(summary.get("evaluation_primary_source", "")),
         "ending_equity": round(float(summary.get("ending_equity", 0.0)), 6),
         "cumulative_return": round(float(summary.get("cumulative_return", 0.0)), 6),
         "annualized_return": round(float(summary.get("annualized_return", 0.0)), 6),
@@ -786,6 +791,7 @@ def _portfolio_summary(result: object) -> dict[str, object]:
         "portfolio_trade_count": int(summary.get("trade_count", 0)),
         "portfolio_win_rate": round(float(summary.get("win_rate", 0.0)), 4),
         "portfolio_avg_net_return": round(float(summary.get("avg_net_return", 0.0)), 6),
+        "portfolio_blocked_entry_count": int(summary.get("blocked_entry_count", 0)),
     }
 
 
@@ -853,6 +859,8 @@ def run_full_market_backtest(
     progress_callback: ProgressCallback | None = None,
     max_workers: int = 8,
     fast_strategy_backtest: bool = False,
+    persist_research: bool = False,
+    duckdb_database: str | Path | None = None,
 ) -> dict[str, object]:
     output_path = Path(output_dir) if output_dir is not None else DEFAULT_OUTPUT_DIR
     output_path.mkdir(parents=True, exist_ok=True)
@@ -972,7 +980,20 @@ def run_full_market_backtest(
         "trading_day_count": int(len(set(result_frame["market_date"])) if not result_frame.empty else 0),
         **_summarize_results(result_frame, positive_return),
         **_portfolio_summary(portfolio_result),
+        **canonical_evaluation_metadata(
+            diagnostic_metric_keys=(
+                "win_rate",
+                "target_hit_rate",
+                "avg_forward_return",
+                "avg_max_high_return",
+                "avg_max_drawdown",
+                "avg_hold_1d_return",
+                "avg_hold_3d_return",
+                "avg_hold_5d_return",
+            )
+        ),
     }
+    assert_canonical_evaluation_summary(summary)
     if not result_frame.empty:
         result_frame = result_frame.sort_values(["market_date", "candidate_priority"], ascending=[True, False]).reset_index(drop=True)
     results_path = output_path / "trade_like_results.csv"
@@ -983,10 +1004,26 @@ def run_full_market_backtest(
     portfolio_result.daily_nav.to_csv(portfolio_nav_path, index=False, encoding="utf-8-sig")
     portfolio_result.trades.to_csv(portfolio_trades_path, index=False, encoding="utf-8-sig")
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    research_run_id = ""
+    if persist_research:
+        with connect_duckdb(duckdb_database) as connection:
+            research_run_id = upsert_research_backtest_summary(
+                connection,
+                summary=summary,
+                paths={
+                    "summary_path": str(summary_path),
+                    "results_path": str(results_path),
+                    "portfolio_nav_path": str(portfolio_nav_path),
+                    "portfolio_trades_path": str(portfolio_trades_path),
+                },
+            )
+        summary["research_run_id"] = research_run_id
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     if progress_callback is not None:
         progress_callback("write_outputs", total_dates, total_dates, f"Saved summary to {summary_path}")
     return {
         "summary": summary,
+        "research_run_id": research_run_id,
         "results_path": str(results_path),
         "portfolio_nav_path": str(portfolio_nav_path),
         "portfolio_trades_path": str(portfolio_trades_path),

@@ -7,10 +7,12 @@ import pytest
 
 from a_share_predictor.duckdb_store import (
     connect_duckdb,
+    ensure_research_backtest_schema,
     normalize_stock_fund_flow_frame,
     rebuild_call_auction_proxy_table,
     sync_intraday_bars_from_local_tree,
     sync_row_database_from_daily_files,
+    upsert_research_backtest_summary,
     upsert_stock_fund_flow_frame,
 )
 
@@ -59,6 +61,45 @@ def test_sync_row_database_from_daily_files_upserts_local_csv(tmp_path):
     assert rows[0][0] == "000001"
     assert rows[0][1] == pytest.approx(10.3)
     assert rows[0][2] == pytest.approx(0.9)
+
+
+def test_upsert_research_backtest_summary_persists_canonical_metrics(tmp_path):
+    duckdb_path = tmp_path / "market.duckdb"
+    summary = {
+        "date_from": "2026-04-01",
+        "date_to": "2026-04-30",
+        "horizon_days": 3,
+        "positive_return": 0.03,
+        "strategy_mode": "strategy1",
+        "top_k": 10,
+        "evaluation_engine": "unified_portfolio_nav_v1",
+        "annualized_return": 0.12,
+        "max_drawdown": -0.04,
+        "portfolio_trade_count": 8,
+    }
+
+    with connect_duckdb(duckdb_path) as connection:
+        ensure_research_backtest_schema(connection)
+        run_id = upsert_research_backtest_summary(
+            connection,
+            summary=summary,
+            paths={"summary_path": "summary.json", "portfolio_nav_path": "portfolio_daily_nav.csv"},
+        )
+        row = connection.execute(
+            """
+            select run_id, evaluation_engine, annualized_return, max_drawdown,
+                   portfolio_trade_count, summary_path, portfolio_nav_path
+            from research_market_backtest_runs
+            """
+        ).fetchone()
+
+    assert row[0] == run_id
+    assert row[1] == "unified_portfolio_nav_v1"
+    assert row[2] == pytest.approx(0.12)
+    assert row[3] == pytest.approx(-0.04)
+    assert row[4] == 8
+    assert row[5] == "summary.json"
+    assert row[6] == "portfolio_daily_nav.csv"
 
 
 def test_sync_intraday_bars_from_local_tree_imports_interval_dirs(tmp_path):

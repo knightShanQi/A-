@@ -41,9 +41,13 @@ def simulate_selected_portfolio(
 def portfolio_summary_fields(result: PortfolioBacktestResult, *, prefix: str = "portfolio_") -> dict[str, object]:
     summary = result.summary
     return {
+        f"{prefix}evaluation_engine": str(summary.get("evaluation_engine", "")),
+        f"{prefix}evaluation_primary_metric": str(summary.get("evaluation_primary_metric", "")),
+        f"{prefix}evaluation_primary_source": str(summary.get("evaluation_primary_source", "")),
         f"{prefix}trade_count": int(summary.get("trade_count", 0)),
         f"{prefix}win_rate": round(float(summary.get("win_rate", 0.0)), 4),
         f"{prefix}avg_net_return": round(float(summary.get("avg_net_return", 0.0)), 6),
+        f"{prefix}blocked_entry_count": int(summary.get("blocked_entry_count", 0)),
         f"{prefix}ending_equity": round(float(summary.get("ending_equity", 0.0)), 6),
         f"{prefix}cumulative_return": round(float(summary.get("cumulative_return", 0.0)), 6),
         f"{prefix}annualized_return": round(float(summary.get("annualized_return", 0.0)), 6),

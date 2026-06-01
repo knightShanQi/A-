@@ -5,6 +5,8 @@ from typing import Iterable
 
 import pandas as pd
 
+from .evaluation import CANONICAL_EVALUATION_ENGINE, CANONICAL_PRIMARY_METRIC, CANONICAL_PRIMARY_SOURCE
+
 
 @dataclass(slots=True)
 class PortfolioBacktestConfig:
@@ -14,6 +16,7 @@ class PortfolioBacktestConfig:
     transaction_cost_rate: float = 0.0015
     slippage_rate: float = 0.001
     min_lot: int = 100
+    price_limit_pct: float | None = 0.10
 
 
 @dataclass(slots=True)
@@ -37,7 +40,7 @@ def _normalize_history_frame(frame: pd.DataFrame) -> pd.DataFrame:
     history = frame.copy()
     history["trade_date"] = pd.to_datetime(history["trade_date"], errors="coerce")
     history["symbol"] = history["symbol"].astype(str).str.extract(r"(\d{6})", expand=False).fillna("").str.zfill(6)
-    for column in ["open", "close", "high", "low"]:
+    for column in ["open", "close", "high", "low", "pre_close"]:
         if column not in history.columns:
             history[column] = pd.NA
         history[column] = pd.to_numeric(history[column], errors="coerce")
@@ -97,6 +100,9 @@ def simulate_portfolio_from_candidates(
             daily_nav=empty_daily,
             trades=empty_trades,
             summary={
+                "evaluation_engine": CANONICAL_EVALUATION_ENGINE,
+                "evaluation_primary_metric": CANONICAL_PRIMARY_METRIC,
+                "evaluation_primary_source": CANONICAL_PRIMARY_SOURCE,
                 "initial_capital": float(cfg.initial_capital),
                 "ending_equity": float(cfg.initial_capital),
                 "cumulative_return": 0.0,
@@ -105,6 +111,7 @@ def simulate_portfolio_from_candidates(
                 "trade_count": 0,
                 "win_rate": 0.0,
                 "avg_net_return": 0.0,
+                "blocked_entry_count": 0,
             },
         )
 
@@ -136,6 +143,7 @@ def simulate_portfolio_from_candidates(
                 "entry_date": entry_date,
                 "planned_exit_date": pd.Timestamp(exit_row["trade_date"]),
                 "entry_open": _safe_float(entry_row.get("open"), _safe_float(entry_row.get("close"), 0.0)),
+                "entry_pre_close": _safe_float(entry_row.get("pre_close"), 0.0),
                 "planned_exit_close": _safe_float(exit_row.get("close"), 0.0),
             }
         )
@@ -144,6 +152,7 @@ def simulate_portfolio_from_candidates(
     open_positions: list[dict[str, object]] = []
     trade_rows: list[dict[str, object]] = []
     nav_rows: list[dict[str, object]] = []
+    blocked_entry_count = 0
 
     for trade_date in calendar:
         current_date = pd.Timestamp(trade_date)
@@ -197,6 +206,12 @@ def simulate_portfolio_from_candidates(
                 entry_price = float(entry["entry_open"])
                 if entry_price <= 0:
                     continue
+                previous_close = float(entry.get("entry_pre_close") or 0.0)
+                if cfg.price_limit_pct is not None and previous_close > 0:
+                    limit_up_price = previous_close * (1.0 + float(cfg.price_limit_pct))
+                    if entry_price >= limit_up_price * 0.999:
+                        blocked_entry_count += 1
+                        continue
                 buy_price = entry_price * (1.0 + float(cfg.slippage_rate))
                 raw_shares = int(target_notional / max(buy_price * (1.0 + float(cfg.transaction_cost_rate)), 1e-9))
                 shares = (raw_shares // max(int(cfg.min_lot), 1)) * max(int(cfg.min_lot), 1)
@@ -258,6 +273,9 @@ def simulate_portfolio_from_candidates(
     cumulative_return = ending_equity / float(cfg.initial_capital) - 1.0 if cfg.initial_capital > 0 else 0.0
     net_returns = pd.to_numeric(trades.get("net_return", pd.Series(dtype=float)), errors="coerce").dropna()
     summary = {
+        "evaluation_engine": CANONICAL_EVALUATION_ENGINE,
+        "evaluation_primary_metric": CANONICAL_PRIMARY_METRIC,
+        "evaluation_primary_source": CANONICAL_PRIMARY_SOURCE,
         "initial_capital": float(cfg.initial_capital),
         "ending_equity": ending_equity,
         "cumulative_return": float(cumulative_return),
@@ -268,5 +286,6 @@ def simulate_portfolio_from_candidates(
         "trade_count": int(len(trades)),
         "win_rate": float((net_returns > 0).mean()) if not net_returns.empty else 0.0,
         "avg_net_return": float(net_returns.mean()) if not net_returns.empty else 0.0,
+        "blocked_entry_count": int(blocked_entry_count),
     }
     return PortfolioBacktestResult(daily_nav=daily_nav, trades=trades, summary=summary)

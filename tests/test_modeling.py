@@ -818,6 +818,8 @@ def test_train_market_wide_model_uses_fixed_train_and_test_windows(monkeypatch, 
     assert result.universe_size == 3
     assert result.eligible_symbols == 2
     assert result.metrics["survivorship_bias_risk"] == 1.0
+    assert result.metrics["model_artifact_registered"] == 1.0
+    assert result.metrics["model_artifact_feature_count"] == len(modeling.MODEL_FEATURE_COLUMNS)
     assert len(result.ensemble_weights) == 3
     assert math.isclose(sum(result.ensemble_weights), 1.0, rel_tol=1e-9)
     assert "2025-01-01" in result.summary

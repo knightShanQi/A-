@@ -38,12 +38,10 @@ from .dashboard import (
     make_minute_chart,
 )
 from .data import parse_watchlist, search_a_share_universe, try_normalize_symbol
-from .market_backtest_runner import (
-    _normalize_strategy_mode,
-    load_latest_full_market_backtest,
-    run_full_market_backtest,
-)
+from .market_backtest_runner import _normalize_strategy_mode
 from .news_impact import analyze_symbol_news_impact
+from .services import BacktestService
+from .task_registry import TaskRegistry
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -59,6 +57,8 @@ DEFAULT_API_PARAMS = {
 API_MODEL_CONTRACT_VERSION = "api-probability-launch-v2"
 API_TASK_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 API_TASK_FUTURES: dict[str, Future] = {}
+DEFAULT_BACKTEST_SERVICE = BacktestService()
+DEFAULT_TASK_REGISTRY = TaskRegistry(PROJECT_ROOT / ".cache" / "api_task_records.json")
 API_ROLLING_REVIEW_TASK_PREFIX = "api-rolling-review"
 API_REVIEW_PANEL_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 API_REVIEW_PANEL_CACHE_TTL_SECONDS = 180.0
@@ -1232,6 +1232,7 @@ def start_rebuild_ranking_task(params: dict[str, Any]) -> dict[str, Any]:
     task_id = f'api-market-refresh::{params["horizon_days"]}::{params["positive_return"]:.4f}'
     future = API_TASK_FUTURES.get(task_id)
     if future is None or future.done():
+        DEFAULT_TASK_REGISTRY.record_submitted(task_id, task_type="market_ranking_rebuild", params=_clean_value(params))
         future = API_TASK_EXECUTOR.submit(
             _refresh_market_rankings_cache_task,
             task_id,
@@ -1246,6 +1247,7 @@ def get_task_status(task_id: str) -> dict[str, Any]:
     future = API_TASK_FUTURES.get(task_id)
     progress = _get_async_task_progress(task_id)
     if future is None:
+        DEFAULT_TASK_REGISTRY.record_status(task_id, status="missing")
         return {
             "task_id": task_id,
             "status": "missing",
@@ -1254,6 +1256,7 @@ def get_task_status(task_id: str) -> dict[str, Any]:
             "error": "",
         }
     if not future.done():
+        DEFAULT_TASK_REGISTRY.record_status(task_id, status="running")
         return {
             "task_id": task_id,
             "status": "running",
@@ -1264,6 +1267,7 @@ def get_task_status(task_id: str) -> dict[str, Any]:
     try:
         result = future.result()
     except Exception as exc:  # pragma: no cover
+        DEFAULT_TASK_REGISTRY.record_status(task_id, status="failed", error=str(exc))
         return {
             "task_id": task_id,
             "status": "failed",
@@ -1271,6 +1275,7 @@ def get_task_status(task_id: str) -> dict[str, Any]:
             "result": None,
             "error": str(exc),
         }
+    DEFAULT_TASK_REGISTRY.record_status(task_id, status="completed")
     return {
         "task_id": task_id,
         "status": "completed",
@@ -1292,6 +1297,14 @@ def _market_backtest_task_id(params: dict[str, Any]) -> str:
             str(params.get("top_k") or 50),
         ]
     )
+
+
+def run_market_backtest(**kwargs: Any) -> dict[str, Any]:
+    return DEFAULT_BACKTEST_SERVICE.run_market_backtest(**kwargs)
+
+
+def load_latest_market_backtest(*, result_limit: int = 50) -> dict[str, Any]:
+    return DEFAULT_BACKTEST_SERVICE.load_latest_market_backtest(result_limit=result_limit)
 
 
 def start_market_backtest_task(
@@ -1316,8 +1329,9 @@ def start_market_backtest_task(
     task_id = _market_backtest_task_id(params)
     future = API_TASK_FUTURES.get(task_id)
     if future is None or future.done():
+        DEFAULT_TASK_REGISTRY.record_submitted(task_id, task_type="market_backtest", params=_clean_value(params))
         future = API_TASK_EXECUTOR.submit(
-            run_full_market_backtest,
+            run_market_backtest,
             date_from=params["date_from"],
             date_to=params["date_to"],
             horizon_days=params["horizon_days"],
@@ -1333,7 +1347,7 @@ def start_market_backtest_task(
 
 
 def load_market_backtest_payload(result_limit: int = 50) -> dict[str, Any]:
-    payload = load_latest_full_market_backtest(result_limit=result_limit)
+    payload = load_latest_market_backtest(result_limit=result_limit)
     if not payload:
         return {
             "status": "missing",

@@ -39,6 +39,7 @@ from .data import (
     normalize_symbol,
 )
 from .features import FEATURE_COLUMNS, build_daily_features, build_training_frame, evaluate_intraday
+from .model_registry import build_model_artifact_metadata, validate_model_time_windows
 from .quant import (
     BEARISH_KEYWORDS,
     BULLISH_KEYWORDS,
@@ -3735,6 +3736,7 @@ def train_market_wide_model(
     *,
     refresh: bool = False,
 ) -> MarketWideModel:
+    validate_model_time_windows(train_start=train_start, train_end=train_end, test_start=test_start, test_end=test_end)
     cache_path = _global_model_cache_path(horizon_days, positive_return, train_start, train_end, test_start, test_end)
     if not refresh and cache_path.exists():
         try:
@@ -3819,6 +3821,21 @@ def train_market_wide_model(
     metrics["ensemble_weight_boost"] = float(ensemble_weights[2])
     metrics["calibration_used"] = float(1.0 if calibrator is not None else 0.0)
     metrics["regime_calibrator_count"] = float(len(regime_calibrators))
+    artifact_metadata = build_model_artifact_metadata(
+        model_family="market_wide_ensemble",
+        label=f"h{int(horizon_days)}_p{float(positive_return):.4f}",
+        horizon_days=horizon_days,
+        positive_return=positive_return,
+        train_start=train_start,
+        train_end=train_end,
+        test_start=test_start,
+        test_end=test_end,
+        feature_schema_version=f"model_schema_v{MODEL_SCHEMA_VERSION}",
+        feature_columns=MODEL_FEATURE_COLUMNS,
+        metrics=metrics,
+    )
+    metrics["model_artifact_registered"] = 1.0
+    metrics["model_artifact_feature_count"] = float(len(artifact_metadata.feature_columns))
     point_in_time_universe = bool(dataset.attrs.get("point_in_time_universe", False))
     source_universe_size = int(dataset.attrs.get("source_universe_size", 0) or 0)
     metrics["point_in_time_universe"] = float(1.0 if point_in_time_universe else 0.0)

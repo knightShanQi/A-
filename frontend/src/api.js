@@ -1,4 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_BASE || "";
+const DEFAULT_TIMEOUT_MS = 30000;
 
 function buildQuery(params = {}) {
   const query = new URLSearchParams();
@@ -13,16 +14,43 @@ function buildQuery(params = {}) {
 
 async function request(path, params = {}, options = {}) {
   const query = buildQuery(params);
-  const response = await fetch(`${API_BASE}${path}${query ? `?${query}` : ""}`, options);
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, signal, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromCaller = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) {
+      controller.abort();
+    } else {
+      signal.addEventListener("abort", abortFromCaller, { once: true });
+    }
+  }
+
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}${query ? `?${query}` : ""}`, {
+      ...fetchOptions,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("Request timed out or was cancelled.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+    signal?.removeEventListener?.("abort", abortFromCaller);
+  }
+
   if (!response.ok) {
-    let message = `请求失败：${response.status}`;
+    let message = `Request failed: ${response.status}`;
     try {
       const payload = await response.json();
       if (payload?.detail) {
         message = String(payload.detail);
       }
     } catch {
-      // Ignore JSON parse failures and preserve the HTTP status message.
+      // Preserve the HTTP status message when the error body is not JSON.
     }
     throw new Error(message);
   }

@@ -49,6 +49,8 @@ def test_simulate_portfolio_from_candidates_limits_positions_and_marks_nav():
     )
 
     assert result.summary["trade_count"] == 2
+    assert result.summary["evaluation_engine"] == "unified_portfolio_nav_v1"
+    assert result.summary["evaluation_primary_source"] == "portfolio_daily_nav"
     assert result.daily_nav["open_positions"].max() == 2
     assert result.summary["ending_equity"] > 100_000.0
     assert set(result.trades["symbol"]) == {"000001", "000002"}
@@ -85,3 +87,31 @@ def test_simulate_portfolio_from_candidates_applies_costs():
 
     assert no_cost.summary["ending_equity"] > with_cost.summary["ending_equity"]
     assert no_cost.trades.iloc[0]["net_return"] > with_cost.trades.iloc[0]["net_return"]
+
+
+def test_simulate_portfolio_blocks_limit_up_entry_when_previous_close_available():
+    history = pd.DataFrame(
+        [
+            {"symbol": "000001", "trade_date": "2026-01-05", "open": 10.0, "close": 10.0, "pre_close": 9.8},
+            {"symbol": "000001", "trade_date": "2026-01-06", "open": 11.0, "close": 11.0, "pre_close": 10.0},
+            {"symbol": "000001", "trade_date": "2026-01-07", "open": 11.2, "close": 11.3, "pre_close": 11.0},
+        ]
+    )
+    candidates = pd.DataFrame([{"market_date": "2026-01-05", "symbol": "000001", "candidate_priority": 90}])
+
+    result = simulate_portfolio_from_candidates(
+        candidates,
+        history,
+        config=PortfolioBacktestConfig(
+            initial_capital=50_000.0,
+            max_positions=1,
+            holding_days=1,
+            transaction_cost_rate=0.0,
+            slippage_rate=0.0,
+            price_limit_pct=0.10,
+        ),
+    )
+
+    assert result.summary["trade_count"] == 0
+    assert result.summary["blocked_entry_count"] == 1
+    assert result.summary["ending_equity"] == 50_000.0

@@ -3,6 +3,7 @@ import json
 import pandas as pd
 
 import a_share_predictor.market_backtest_runner as runner
+from a_share_predictor.duckdb_store import connect_duckdb
 
 
 def test_run_full_market_backtest_writes_summary_and_results(monkeypatch, tmp_path):
@@ -70,6 +71,8 @@ def test_run_full_market_backtest_writes_summary_and_results(monkeypatch, tmp_pa
         top_k=2,
         output_dir=tmp_path,
         force_rebuild=True,
+        persist_research=True,
+        duckdb_database=tmp_path / "research.duckdb",
     )
 
     assert payload["summary"]["trade_count"] == 2
@@ -81,6 +84,11 @@ def test_run_full_market_backtest_writes_summary_and_results(monkeypatch, tmp_pa
     assert "annualized_return" in payload["summary"]
     assert "ending_equity" in payload["summary"]
     assert "max_drawdown" in payload["summary"]
+    assert payload["summary"]["evaluation_engine"] == "unified_portfolio_nav_v1"
+    assert payload["summary"]["evaluation_primary_metric"] == "annualized_return"
+    assert payload["summary"]["evaluation_primary_source"] == "portfolio_daily_nav"
+    assert "avg_forward_return" in payload["summary"]["diagnostic_metric_keys"]
+    assert payload["summary"]["research_run_id"]
     assert payload["summary"]["portfolio_trade_count"] == 2
     assert len(payload["results"]) == 2
     assert "hold_1d_return" in payload["results"].columns
@@ -95,6 +103,9 @@ def test_run_full_market_backtest_writes_summary_and_results(monkeypatch, tmp_pa
     assert len(latest["results"]) == 2
     assert not latest["portfolio_daily_nav"].empty
     assert len(latest["portfolio_trades"]) == 2
+    with connect_duckdb(tmp_path / "research.duckdb", read_only=True) as connection:
+        stored = connection.execute("select evaluation_engine, portfolio_trade_count from research_market_backtest_runs").fetchone()
+    assert stored == ("unified_portfolio_nav_v1", 2)
 
 
 def test_run_full_market_backtest_can_filter_strategy(monkeypatch, tmp_path):
