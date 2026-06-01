@@ -73,7 +73,7 @@ def test_select_preferred_share_files_uses_latest_available_trade_file(monkeypat
         ]
     )
 
-    assert [item["server_filename"] for item in selected] == ["2026.7z", "20260526.csv", "20260526.7z", "stock_basic.csv"]
+    assert [item["server_filename"] for item in selected] == ["20260526.csv", "20260526.7z", "stock_basic.csv"]
 
 
 def test_select_intraday_share_files_filters_year_and_interval():

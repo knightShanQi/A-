@@ -748,10 +748,10 @@ def _select_preferred_share_files(files: list[dict], *, backfill_years: set[int]
                 score = int(filename[:4])
             else:
                 continue
-        elif "每日指标" in path and filename == year_name:
-            score = 0
         elif latest_available_name in filename and ("每日数据" in path or "每日指标" in path):
             score = 1
+        elif "每日指标" in path and filename == year_name and not dated_names:
+            score = 10
         elif "stock_basic" in filename.lower() or "股票列表" in filename:
             score = 20
         else:
