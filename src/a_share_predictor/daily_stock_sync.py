@@ -363,8 +363,11 @@ def iter_data_files(root: Path) -> list[Path]:
     if not root.exists():
         return []
     files = sorted(path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in SUPPORTED_DATA_SUFFIXES)
-    one_minute_files = [path for path in files if any(part.lower() == "1min" for part in path.parts)]
-    return one_minute_files or files
+    for interval in (60, 30, 15, 5, 1):
+        minute_files = [path for path in files if any(part.lower() == f"{interval}min" for part in path.parts)]
+        if minute_files:
+            return minute_files
+    return files
 
 
 def _extract_rar_archive(archive_path: Path, target_dir: Path) -> None:

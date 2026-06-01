@@ -118,6 +118,22 @@ def test_select_intraday_share_files_matches_year_ranges():
     assert [item["server_filename"] for item in selected] == ["15min.rar"]
 
 
+def test_iter_data_files_prefers_coarser_minute_files(tmp_path):
+    root = tmp_path / "20260528"
+    one_minute = root / "1min"
+    sixty_minute = root / "60min"
+    one_minute.mkdir(parents=True)
+    sixty_minute.mkdir(parents=True)
+    one_file = one_minute / "sz000001.csv"
+    sixty_file = sixty_minute / "sz000001.csv"
+    daily_file = root / "daily.csv"
+    one_file.write_text("symbol,trade_date,close\n000001,2026-05-28,10.1\n", encoding="utf-8")
+    sixty_file.write_text("symbol,trade_date,close\n000001,2026-05-28,10.1\n", encoding="utf-8")
+    daily_file.write_text("symbol,trade_date,close\n000001,2026-05-28,10.1\n", encoding="utf-8")
+
+    assert sync.iter_data_files(root) == [sixty_file]
+
+
 def test_baidu_download_falls_back_to_transfer_when_direct_link_forbidden(tmp_path):
     class FakeResponse:
         def __init__(self, status_code, chunks=()):

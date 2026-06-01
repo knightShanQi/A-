@@ -1227,6 +1227,65 @@ def _intraday_date_hint(path: Path) -> dt.date | None:
     return None
 
 
+def _parse_intraday_date_cell(value: str) -> dt.date | None:
+    text = value.strip().strip('"').strip("'")
+    if not text:
+        return None
+    match = re.search(r"(?<!\d)(20\d{2})[-/]?([01]\d)[-/]?([0-3]\d)(?!\d)", text)
+    if not match:
+        return None
+    try:
+        return dt.date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    except ValueError:
+        return None
+
+
+def _split_intraday_tail_line(line: str) -> list[str]:
+    for separator in (",", "\t", ";", "|"):
+        if separator in line:
+            return [part.strip() for part in line.split(separator)]
+    return line.split()
+
+
+def _latest_intraday_date_in_file(path: Path) -> dt.date | None:
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            handle.seek(max(size - 65536, 0))
+            raw = handle.read()
+    except OSError:
+        return None
+    for encoding in ("utf-8-sig", "gb18030", "utf-16"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = raw.decode("utf-8", errors="ignore")
+    dates: list[dt.date] = []
+    for line in reversed(text.splitlines()[-32:]):
+        if not line.strip():
+            continue
+        for cell in _split_intraday_tail_line(line)[:3]:
+            parsed = _parse_intraday_date_cell(cell)
+            if parsed is not None:
+                dates.append(parsed)
+                break
+    return max(dates) if dates else None
+
+
+def _latest_intraday_trade_date(interval_dir: Path) -> dt.date | None:
+    latest: dt.date | None = None
+    for path in interval_dir.rglob("*.csv"):
+        if not path.is_file():
+            continue
+        file_date = _latest_intraday_date_in_file(path)
+        if file_date is not None and (latest is None or file_date > latest):
+            latest = file_date
+    return latest
+
+
 def _prepare_intraday_roots(source_dir: str | Path) -> list[Path]:
     from . import daily_stock_sync
 
@@ -1405,16 +1464,31 @@ def sync_intraday_bars_from_local_tree(
         rows_written = 0
         imported_dirs: list[dict[str, object]] = []
         for interval, path in interval_dirs:
+            import_start_date = start_date
+            import_end_date = end_date
+            latest_date: dt.date | None = None
+            if latest_only and start_date is None and end_date is None:
+                latest_date = _intraday_date_hint(path) or _latest_intraday_trade_date(path)
+                if latest_date is not None:
+                    import_start_date = latest_date
+                    import_end_date = latest_date
             imported = _import_intraday_interval_dir(
                 duck_conn,
                 intraday_table=intraday_table,
                 interval=interval,
                 interval_dir=path,
-                start_date=start_date,
-                end_date=end_date,
+                start_date=import_start_date,
+                end_date=import_end_date,
             )
             rows_written += int(imported)
-            imported_dirs.append({"interval_minutes": int(interval), "path": str(path), "rows_written": int(imported)})
+            imported_dirs.append(
+                {
+                    "interval_minutes": int(interval),
+                    "path": str(path),
+                    "rows_written": int(imported),
+                    "latest_trade_date": str(latest_date) if latest_date is not None else None,
+                }
+            )
             print(f"[duckdb] intraday import {interval}min {path}: {imported} rows", flush=True)
         retention = purge_intraday_bars(
             duck_conn,

@@ -169,6 +169,57 @@ def test_sync_intraday_bars_file_batches_do_not_overwrite_other_symbols(tmp_path
     assert rows == [("000001", pytest.approx(10.1)), ("000002", pytest.approx(20.2)), ("600001", pytest.approx(30.3))]
 
 
+def test_sync_intraday_bars_latest_only_filters_undated_dir_by_csv_date(tmp_path):
+    root = tmp_path / "2026"
+    interval_dir = root / "1min"
+    interval_dir.mkdir(parents=True)
+    interval_dir.joinpath("sz000001.csv").write_text(
+        "鏃ユ湡,鏃堕棿,寮€鐩?鏈€楂?鏈€浣?鏀剁洏,鎴愪氦閲?鎴愪氦棰漒n"
+        "2026-05-27,09:30,10.0,10.1,9.9,10.0,100,1000\n"
+        "2026-05-28,09:30,10.0,10.2,9.9,10.1,100,1000\n",
+        encoding="utf-8",
+    )
+    interval_dir.joinpath("sz000002.csv").write_text(
+        "鏃ユ湡,鏃堕棿,寮€鐩?鏈€楂?鏈€浣?鏀剁洏,鎴愴氦閲?鎴愪氦棰漒n"
+        "2026-05-27,09:30,20.0,20.1,19.9,20.0,100,1000\n"
+        "2026-05-28,09:30,20.0,20.2,19.9,20.1,100,1000\n",
+        encoding="utf-8",
+    )
+    header = (
+        "\u65e5\u671f,\u65f6\u95f4,\u5f00\u76d8,\u6700\u9ad8,\u6700\u4f4e,"
+        "\u6536\u76d8,\u6210\u4ea4\u91cf,\u6210\u4ea4\u989d\n"
+    )
+    interval_dir.joinpath("sz000001.csv").write_text(
+        header
+        + "2026-05-27,09:30,10.0,10.1,9.9,10.0,100,1000\n"
+        + "2026-05-28,09:30,10.0,10.2,9.9,10.1,100,1000\n",
+        encoding="utf-8",
+    )
+    interval_dir.joinpath("sz000002.csv").write_text(
+        header
+        + "2026-05-27,09:30,20.0,20.1,19.9,20.0,100,1000\n"
+        + "2026-05-28,09:30,20.0,20.2,19.9,20.1,100,1000\n",
+        encoding="utf-8",
+    )
+    duckdb_path = tmp_path / "market.duckdb"
+
+    result = sync_intraday_bars_from_local_tree(
+        duckdb_database=duckdb_path,
+        source_dir=root,
+        intervals=[1],
+        latest_only=True,
+        retention_days=None,
+    )
+
+    assert result["rows_written"] == 2
+    assert result["interval_dirs"][0]["latest_trade_date"] == "2026-05-28"
+    with connect_duckdb(duckdb_path, read_only=True) as connection:
+        dates = connection.execute(
+            "select distinct trade_date from a_share_intraday_bars order by trade_date"
+        ).fetchall()
+    assert [str(row[0]) for row in dates] == ["2026-05-28"]
+
+
 def test_sync_intraday_bars_applies_retention_window(tmp_path):
     root = tmp_path / "bars"
     old_dir = root / "20240520" / "1min"
