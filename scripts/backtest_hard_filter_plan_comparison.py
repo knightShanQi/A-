@@ -517,6 +517,37 @@ def _build_plan_candidates_for_day(day: pd.DataFrame, market_date: str, regime_r
     return candidates.reset_index(drop=True)
 
 
+def _cap_daily_plan_candidates(candidates: pd.DataFrame, daily_cap: int) -> pd.DataFrame:
+    if candidates.empty or int(daily_cap) <= 0 or len(candidates) <= int(daily_cap):
+        return candidates.copy()
+    cap = int(daily_cap)
+    quotas = {
+        "strategy1_plan_p1": max(int(round(cap * 0.40)), 1),
+        "strategy2_plan_p1": max(int(round(cap * 0.30)), 1),
+        "strategy3_plan_p1": max(int(round(cap * 0.30)), 1),
+    }
+    selected_parts: list[pd.DataFrame] = []
+    used: set[int] = set()
+    ranked = candidates.sort_values(["candidate_priority", "amount"], ascending=False).copy()
+    for label, quota in quotas.items():
+        part = ranked.loc[ranked["candidate_strategy"].eq(label)].head(quota).copy()
+        if not part.empty:
+            selected_parts.append(part)
+            used.update(int(idx) for idx in part.index.tolist())
+    selected = pd.concat(selected_parts, ignore_index=False, sort=False) if selected_parts else pd.DataFrame(columns=ranked.columns)
+    remaining_slots = cap - len(selected)
+    if remaining_slots > 0:
+        filler = ranked.loc[~ranked.index.isin(used)].head(remaining_slots).copy()
+        if not filler.empty:
+            selected = pd.concat([selected, filler], ignore_index=False, sort=False)
+    return (
+        selected.sort_values(["candidate_priority", "amount"], ascending=False)
+        .drop_duplicates(["market_date", "symbol"], keep="first")
+        .head(cap)
+        .reset_index(drop=True)
+    )
+
+
 def build_plan_candidate_pool(history: pd.DataFrame, regime: pd.DataFrame, date_from: str, date_to: str, *, daily_cap: int = 150) -> pd.DataFrame:
     start = pd.to_datetime(date_from)
     end = pd.to_datetime(date_to)
@@ -538,8 +569,7 @@ def build_plan_candidate_pool(history: pd.DataFrame, regime: pd.DataFrame, date_
         regime_row = pd.Series(row._asdict()) if row is not None else None
         candidates = _build_plan_candidates_for_day(day, market_date, regime_row)
         if not candidates.empty:
-            if int(daily_cap) > 0:
-                candidates = candidates.sort_values(["candidate_priority", "amount"], ascending=False).head(int(daily_cap)).copy()
+            candidates = _cap_daily_plan_candidates(candidates, int(daily_cap))
             frames.append(candidates)
     if not frames:
         return pd.DataFrame()
@@ -650,9 +680,18 @@ def enrich_candidates(frame: pd.DataFrame, regime: pd.DataFrame) -> pd.DataFrame
     text = enriched["candidate_strategy"].fillna("").astype(str).str.lower()
     enriched["strategy_family"] = np.select(
         [
-            text.str.contains("strategy1", regex=False) | text.str.contains("策略1", regex=False) | text.str.contains("绛栫暐1", regex=False),
-            text.str.contains("strategy2", regex=False) | text.str.contains("策略2", regex=False) | text.str.contains("绛栫暐2", regex=False),
-            text.str.contains("strategy3", regex=False) | text.str.contains("策略3", regex=False) | text.str.contains("绛栫暐3", regex=False),
+            text.str.contains("strategy1", regex=False)
+            | text.str.contains("策略1", regex=False)
+            | text.str.contains("绛栫暐1", regex=False)
+            | (text.str.contains("1", regex=False) & ~text.str.contains("strategy2|strategy3|plan_p1", regex=True)),
+            text.str.contains("strategy2", regex=False)
+            | text.str.contains("策略2", regex=False)
+            | text.str.contains("绛栫暐2", regex=False)
+            | (text.str.contains("2", regex=False) & ~text.str.contains("strategy1|strategy3|plan_p1", regex=True)),
+            text.str.contains("strategy3", regex=False)
+            | text.str.contains("策略3", regex=False)
+            | text.str.contains("绛栫暐3", regex=False)
+            | (text.str.contains("3", regex=False) & ~text.str.contains("strategy1|strategy2|plan_p1", regex=True)),
         ],
         ["strategy1", "strategy2", "strategy3"],
         default="unknown",
@@ -771,6 +810,9 @@ def _period_metrics(curve: pd.DataFrame, selected: pd.DataFrame) -> dict[str, ob
 
 
 def evaluate_rules(frame: pd.DataFrame, calendar: pd.DataFrame, rules: list[Rule], source: str, cost_bps_values: Iterable[float]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if not frame.empty and not calendar.empty:
+        allowed_dates = set(pd.to_datetime(calendar["market_date"], errors="coerce").dropna().dt.normalize())
+        frame = frame.loc[pd.to_datetime(frame["market_date"], errors="coerce").dt.normalize().isin(allowed_dates)].copy()
     rows: list[dict[str, object]] = []
     selected_samples: list[pd.DataFrame] = []
     for index, rule in enumerate(rules, start=1):
@@ -814,11 +856,19 @@ def evaluate_rules(frame: pd.DataFrame, calendar: pd.DataFrame, rules: list[Rule
     return summary, samples
 
 
-def candidate_count_summary(frame: pd.DataFrame, source: str) -> pd.DataFrame:
-    if frame.empty:
+def candidate_count_summary(frame: pd.DataFrame, source: str, calendar: pd.DataFrame) -> pd.DataFrame:
+    if calendar.empty:
         return pd.DataFrame()
+    base = calendar[["market_date"]].copy()
+    base["market_date"] = pd.to_datetime(base["market_date"], errors="coerce").dt.normalize()
+    if frame.empty:
+        base["total_candidates"] = 0
+        base["source"] = source
+        return base
     local = frame.copy()
-    local["market_date"] = pd.to_datetime(local["market_date"], errors="coerce")
+    local["market_date"] = pd.to_datetime(local["market_date"], errors="coerce").dt.normalize()
+    allowed_dates = set(base["market_date"].dropna())
+    local = local.loc[local["market_date"].isin(allowed_dates)].copy()
     daily = local.groupby("market_date").agg(total_candidates=("symbol", "nunique")).reset_index()
     strategy = (
         local.groupby(["market_date", "strategy_family"])
@@ -826,7 +876,8 @@ def candidate_count_summary(frame: pd.DataFrame, source: str) -> pd.DataFrame:
         .unstack(fill_value=0)
         .reset_index()
     )
-    result = daily.merge(strategy, on="market_date", how="left")
+    result = base.merge(daily, on="market_date", how="left").merge(strategy, on="market_date", how="left")
+    result["total_candidates"] = pd.to_numeric(result["total_candidates"], errors="coerce").fillna(0).astype(int)
     result["source"] = source
     return result
 
@@ -994,8 +1045,8 @@ def run_comparison(
         ["source", "cost_bps", "cost_adjusted_score", "return_drawdown_ratio", "annualized_return"],
         ascending=[True, True, False, False, False],
     )
-    old_counts = candidate_count_summary(old, "old_strict")
-    plan_counts = candidate_count_summary(plan_scored, "plan_p1")
+    old_counts = candidate_count_summary(old, "old_strict", calendar)
+    plan_counts = candidate_count_summary(plan_scored, "plan_p1", calendar)
     counts = pd.concat([old_counts, plan_counts], ignore_index=True, sort=False)
     samples = pd.concat([old_samples, plan_samples], ignore_index=True, sort=False) if not old_samples.empty or not plan_samples.empty else pd.DataFrame()
 

@@ -97,6 +97,37 @@ def test_sync_intraday_bars_from_local_tree_imports_interval_dirs(tmp_path):
     assert rows[1][4] == pytest.approx(10.2)
 
 
+def test_sync_intraday_bars_file_batches_do_not_overwrite_other_symbols(tmp_path, monkeypatch):
+    root = tmp_path / "20260526"
+    interval_dir = root / "1min"
+    interval_dir.mkdir(parents=True)
+    for symbol, close in [("sz000001", 10.1), ("sz000002", 20.2), ("sh600001", 30.3)]:
+        interval_dir.joinpath(f"{symbol}.csv").write_text(
+            "日期,时间,开盘,最高,最低,收盘,成交量,成交额\n"
+            f"2026-05-26,09:30,{close - 0.1},{close + 0.1},{close - 0.2},{close},100,1000\n",
+            encoding="utf-8",
+        )
+    duckdb_path = tmp_path / "market.duckdb"
+    monkeypatch.setenv("OPENCLAW_INTRADAY_IMPORT_BATCH_FILES", "1")
+
+    result = sync_intraday_bars_from_local_tree(
+        duckdb_database=duckdb_path,
+        source_dir=root,
+        intervals=[1],
+    )
+
+    assert result["rows_written"] == 3
+    with connect_duckdb(duckdb_path, read_only=True) as connection:
+        rows = connection.execute(
+            """
+            select symbol, close
+            from a_share_intraday_bars
+            order by symbol
+            """
+        ).fetchall()
+    assert rows == [("000001", pytest.approx(10.1)), ("000002", pytest.approx(20.2)), ("600001", pytest.approx(30.3))]
+
+
 def test_sync_intraday_bars_applies_retention_window(tmp_path):
     root = tmp_path / "bars"
     old_dir = root / "20240520" / "1min"

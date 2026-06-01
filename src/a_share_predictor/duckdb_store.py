@@ -22,6 +22,7 @@ DEFAULT_INTRADAY_TABLE = "a_share_intraday_bars"
 DEFAULT_STOCK_FUND_FLOW_TABLE = "a_share_stock_fund_flow"
 DEFAULT_CALL_AUCTION_PROXY_TABLE = "a_share_call_auction_proxy"
 DEFAULT_INTRADAY_RETENTION_DAYS = 365
+DEFAULT_INTRADAY_IMPORT_BATCH_FILES = 250
 INTRADAY_INTERVALS = (1, 5, 15, 30, 60)
 YEARLY_DATE_COL = "\u65e5\u671f"
 YEARLY_CLOSE_COL = "\u6536\u76d8\u4ef7"
@@ -1051,6 +1052,36 @@ def intraday_retention_days(value: str | int | None = None) -> int | None:
     return days
 
 
+def intraday_import_batch_files(value: str | int | None = None) -> int:
+    load_env_file()
+    raw = value if value is not None else os.getenv(
+        "OPENCLAW_INTRADAY_IMPORT_BATCH_FILES",
+        str(DEFAULT_INTRADAY_IMPORT_BATCH_FILES),
+    )
+    try:
+        batch_size = int(str(raw).strip())
+    except ValueError as exc:
+        raise ValueError(f"invalid intraday import batch file count: {raw}") from exc
+    if batch_size <= 0:
+        raise ValueError(f"intraday import batch file count must be positive: {raw}")
+    return batch_size
+
+
+def _iter_batches(items: list[Path], batch_size: int) -> Iterable[list[Path]]:
+    for offset in range(0, len(items), batch_size):
+        yield items[offset : offset + batch_size]
+
+
+def _sql_string_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _duckdb_csv_sources_expression(files: list[Path]) -> str:
+    if len(files) == 1:
+        return _sql_string_literal(files[0].as_posix())
+    return "[" + ", ".join(_sql_string_literal(file.as_posix()) for file in files) + "]"
+
+
 def _date_or_today(value: str | dt.date | None = None) -> dt.date:
     if value is None:
         return dt.date.today()
@@ -1154,47 +1185,75 @@ def _import_intraday_interval_dir(
     start_date: str | dt.date | None = None,
     end_date: str | dt.date | None = None,
 ) -> int:
-    source_glob = interval_dir.as_posix() + "/**/*.csv"
+    source_files = sorted(path.resolve() for path in interval_dir.rglob("*.csv") if path.is_file())
+    if not source_files:
+        return 0
     temp_table = "tmp_openclaw_intraday_import"
     date_filters = ""
-    params: list[object] = [int(interval), source_glob]
+    params: list[object] = [int(interval)]
     if start_date is not None:
         date_filters += f'\n          and try_cast("{INTRADAY_DATE_COL}" as date) >= cast(? as date)'
         params.append(str(start_date))
     if end_date is not None:
         date_filters += f'\n          and try_cast("{INTRADAY_DATE_COL}" as date) <= cast(? as date)'
         params.append(str(end_date))
-    connection.execute(f"drop table if exists {temp_table}")
-    connection.execute(
-        f"""
-        create temp table {temp_table} as
-        select regexp_extract(filename, '([0-9]{{6}})\\.csv$', 1) as symbol,
-               try_cast("{INTRADAY_DATE_COL}" as date) as trade_date,
-               try_cast("{INTRADAY_TIME_COL}" as time) as bar_time,
-               cast(? as smallint) as interval_minutes,
-               try_cast("{INTRADAY_OPEN_COL}" as real) as open,
-               try_cast("{INTRADAY_HIGH_COL}" as real) as high,
-               try_cast("{INTRADAY_LOW_COL}" as real) as low,
-               try_cast("{INTRADAY_CLOSE_COL}" as real) as close,
-               try_cast("{INTRADAY_VOLUME_COL}" as double) as volume,
-               try_cast("{INTRADAY_AMOUNT_COL}" as double) as amount,
-               filename as source_file
-        from read_csv_auto(?, filename=true, union_by_name=true)
-        where regexp_extract(filename, '([0-9]{{6}})\\.csv$', 1) <> ''
-          and try_cast("{INTRADAY_DATE_COL}" as date) is not null
-          and try_cast("{INTRADAY_TIME_COL}" as time) is not null
-          and try_cast("{INTRADAY_CLOSE_COL}" as real) is not null
-          {date_filters}
-        """,
-        params,
-    )
-    imported = int(connection.execute(f"select count(*) from {temp_table}").fetchone()[0])
-    if imported:
+    imported = 0
+    batch_size = intraday_import_batch_files()
+    batches = list(_iter_batches(source_files, batch_size))
+    for batch_index, batch_files in enumerate(batches, start=1):
+        source_expression = _duckdb_csv_sources_expression(batch_files)
+        connection.execute(
+            f"""
+            drop table if exists {temp_table}
+            """
+        )
+        connection.execute(
+            f"""
+            create temp table {temp_table} as
+            select regexp_extract(filename, '([0-9]{{6}})\\.csv$', 1) as symbol,
+                   try_cast("{INTRADAY_DATE_COL}" as date) as trade_date,
+                   try_cast("{INTRADAY_TIME_COL}" as time) as bar_time,
+                   cast(? as smallint) as interval_minutes,
+                   try_cast("{INTRADAY_OPEN_COL}" as real) as open,
+                   try_cast("{INTRADAY_HIGH_COL}" as real) as high,
+                   try_cast("{INTRADAY_LOW_COL}" as real) as low,
+                   try_cast("{INTRADAY_CLOSE_COL}" as real) as close,
+                   try_cast("{INTRADAY_VOLUME_COL}" as double) as volume,
+                   try_cast("{INTRADAY_AMOUNT_COL}" as double) as amount,
+                   filename as source_file
+            from read_csv_auto({source_expression}, filename=true, union_by_name=true)
+            where regexp_extract(filename, '([0-9]{{6}})\\.csv$', 1) <> ''
+              and try_cast("{INTRADAY_DATE_COL}" as date) is not null
+              and try_cast("{INTRADAY_TIME_COL}" as time) is not null
+              and try_cast("{INTRADAY_CLOSE_COL}" as real) is not null
+              {date_filters}
+            """,
+            params,
+        )
+        batch_imported = int(
+            connection.execute(
+                f"""
+                select count(*)
+                from (
+                    select row_number() over (
+                               partition by symbol, trade_date, bar_time, interval_minutes
+                               order by source_file desc
+                           ) as rn
+                    from {temp_table}
+                )
+                where rn = 1
+                """
+            ).fetchone()[0]
+        )
+        if not batch_imported:
+            continue
         connection.execute(
             f"""
             delete from {intraday_table}
-            where interval_minutes = ?
-              and trade_date in (select distinct trade_date from {temp_table})
+            using {temp_table}
+            where {intraday_table}.interval_minutes = ?
+              and {intraday_table}.symbol = {temp_table}.symbol
+              and {intraday_table}.trade_date = {temp_table}.trade_date
             """,
             [int(interval)],
         )
@@ -1217,17 +1276,13 @@ def _import_intraday_interval_dir(
             where rn = 1
             """
         )
-        imported = int(
-            connection.execute(
-                f"""
-                select count(*)
-                from {intraday_table}
-                where interval_minutes = ?
-                  and trade_date in (select distinct trade_date from {temp_table})
-                """,
-                [int(interval)],
-            ).fetchone()[0]
-        )
+        imported += batch_imported
+        if len(batches) > 1:
+            print(
+                f"[duckdb] intraday import {interval}min batch {batch_index}/{len(batches)}: {batch_imported} rows",
+                flush=True,
+            )
+            connection.execute("checkpoint")
     connection.execute(f"drop table if exists {temp_table}")
     return imported
 
